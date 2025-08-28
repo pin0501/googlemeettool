@@ -148,20 +148,13 @@
         searchInput.addEventListener('input', renderParticipantList);
         searchInput.addEventListener('focus', () => {
              if (uniqueParticipantNames.size > 0) {
-                renderParticipantList(); // render but only show when focused (handled inside)
+                participantListContainer.classList.remove('hidden');
+                renderParticipantList();
              }
         });
-        // 點擊外部隱藏下拉
         document.addEventListener('click', (e) => {
             if (!searchInput.contains(e.target) && !participantListContainer.contains(e.target)) {
                 participantListContainer.classList.add('hidden');
-            }
-        });
-        // Esc 快捷鍵關閉下拉
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                participantListContainer.classList.add('hidden');
-                if (document.activeElement === searchInput) searchInput.blur();
             }
         });
 
@@ -190,22 +183,32 @@
             fileStatus.appendChild(processingStatus);
 
             const promises = zipFiles.map(file => processZipFile(file).catch(err => ({ file: file.name, error: err.message })));
-            const results = await Promise.all(promises);
+            // Promise.allSettled is better here to ensure all zips are processed even if one fails
+            const results = await Promise.allSettled(promises);
             
             processingStatus.remove();
-
+            
+            let totalMeetingsParsed = 0;
             results.forEach(result => {
-                if (result.error) {
-                    updateStatus(`處理檔案 ${result.file} 失敗: ${result.error}`, 'error');
-                } else if (result.data) {
-                    allMeetingsData.push(result.data);
-                    uniqueMeetingCodes.add(result.data.meetingCode);
-                    updateStatus(`成功解析檔案: ${result.file}`, 'success');
+                if (result.status === 'rejected') {
+                    // This might not be hit if the inner promise catches, but good practice
+                    updateStatus(`處理檔案時發生未知錯誤: ${result.reason}`, 'error');
+                    return;
+                }
+
+                const { file, data, error } = result.value;
+                if (error) {
+                    updateStatus(`處理檔案 ${file} 失敗: ${error}`, 'error');
+                } else if (data && data.length > 0) {
+                    allMeetingsData = allMeetingsData.concat(data);
+                    data.forEach(meeting => uniqueMeetingCodes.add(meeting.meetingCode));
+                    updateStatus(`成功從 ${file} 解析 ${data.length} 場會議`, 'success');
+                    totalMeetingsParsed += data.length;
                 }
             });
 
-            if (allMeetingsData.length > 0) {
-                updateStatus(`總共成功匯入 ${allMeetingsData.length} 場會議紀錄。`, 'info');
+            if (totalMeetingsParsed > 0) {
+                updateStatus(`總共成功匯入 ${totalMeetingsParsed} 場會議紀錄。`, 'info');
                 filterAndSearchSection.classList.remove('hidden');
                 searchInput.disabled = false;
                 searchInput.placeholder = "點擊此處或輸入姓名以搜尋...";
@@ -217,30 +220,54 @@
             }
         }
 
+        // *** MODIFIED FUNCTION to handle multiple reports in one zip ***
         function processZipFile(file) {
             return new Promise((resolve, reject) => {
                 const jszip = new JSZip();
                 jszip.loadAsync(file).then(zip => {
-                    const reportFile = Object.keys(zip.files).find(f => !zip.files[f].dir && (f.endsWith('.csv') || f.endsWith('.xlsx')));
-                    if (!reportFile) return reject(new Error('在 .zip 檔中找不到 .csv 或 .xlsx 會議紀錄。'));
+                    // Find ALL report files, not just the first one.
+                    const reportFiles = Object.keys(zip.files).filter(filename => 
+                        !zip.files[filename].dir && (filename.endsWith('.csv') || filename.endsWith('.xlsx'))
+                    );
 
-                    const match = reportFile.match(/(\d{4}-\d{2}-\d{2}).*?「(.*?)」/);
-                    if (!match) return reject(new Error(`無法從檔名 "${reportFile}" 中解析會議日期。`));
-                    const [_, date, meetingCode] = match;
+                    if (reportFiles.length === 0) {
+                        return reject(new Error('在 .zip 檔中找不到任何 .csv 或 .xlsx 會議紀錄。'));
+                    }
 
-                    const filePromise = reportFile.endsWith('.csv') 
-                        ? zip.file(reportFile).async('string').then(parseCsvContent)
-                        : zip.file(reportFile).async('arraybuffer').then(parseXlsxContent);
-                    
-                    filePromise.then(participants => resolve({ file: file.name, data: { date, meetingCode, participants } }));
+                    // Create a promise for each report file found.
+                    const meetingPromises = reportFiles.map(reportFilePath => {
+                        return new Promise((resolveFile, rejectFile) => {
+                            const match = reportFilePath.match(/(\d{4}-\d{2}-\d{2}).*?「(.*?)」/);
+                            if (!match) {
+                                // Ignore files that don't match the expected naming convention.
+                                return resolveFile(null);
+                            }
+                            const [_, date, meetingCode] = match;
+
+                            const filePromise = reportFilePath.endsWith('.csv') 
+                                ? zip.file(reportFilePath).async('string').then(parseCsvContent)
+                                : zip.file(reportFilePath).async('arraybuffer').then(parseXlsxContent);
+                            
+                            filePromise.then(participants => {
+                                resolveFile({ date, meetingCode, participants });
+                            }).catch(rejectFile);
+                        });
+                    });
+
+                    // Wait for all file promises to resolve.
+                    Promise.all(meetingPromises).then(meetings => {
+                        // Filter out any null results from files that didn't match the name pattern.
+                        const validMeetings = meetings.filter(m => m !== null);
+                        // Resolve with the array of valid meetings.
+                        resolve({ file: file.name, data: validMeetings });
+                    }).catch(reject);
+
                 }).catch(err => reject(new Error(`無法讀取 .zip 檔案: ${err.message}`)));
             });
         }
 
         function parseXlsxContent(buffer) {
-            // Ensure ArrayBuffer is converted to Uint8Array for SheetJS
-            const data = new Uint8Array(buffer);
-            const workbook = XLSX.read(data, { type: 'array' });
+            const workbook = XLSX.read(buffer, { type: 'array' });
             const sheetName = workbook.SheetNames[0];
             const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
             return jsonData.slice(1).map(row => ({
@@ -251,7 +278,7 @@
         }
 
         function parseCsvContent(csvText) {
-            const lines = csvText.trim().split(/\r?\n/);
+            const lines = csvText.trim().split('\n');
             return lines.slice(1).map(line => {
                 const columns = line.split(',');
                 return {
@@ -267,7 +294,6 @@
             meetingList.innerHTML = '';
             [...uniqueMeetingCodes].sort().forEach(code => {
                 const container = document.createElement('label');
-                // *** 修改：移除 hover 背景色，改為更細膩的互動效果 ***
                 container.className = 'flex items-center space-x-3 p-2 rounded-md hover:opacity-75 cursor-pointer transition-opacity duration-200';
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
@@ -299,49 +325,18 @@
         function renderParticipantList() {
             const filterText = searchInput.value.toLowerCase();
             const filteredNames = [...uniqueParticipantNames].filter(name => name.toLowerCase().includes(filterText)).sort();
-
-            // 建立內容但是否顯示由 focus 決定
+            
             participantListContainer.innerHTML = '';
-            // 確保容器可定位以讓關閉按鈕絕對定位
-            participantListContainer.classList.add('relative');
-
-            // 關閉按鈕（右上角）
-            const closeBtn = document.createElement('button');
-            closeBtn.type = 'button';
-            closeBtn.innerHTML = '&times;';
-            closeBtn.className = 'absolute top-2 right-2 text-slate-500 hover:text-slate-700 px-2 py-1';
-            closeBtn.addEventListener('click', (ev) => {
-                ev.stopPropagation();
-                participantListContainer.classList.add('hidden');
-                searchInput.blur();
-            });
-            participantListContainer.appendChild(closeBtn);
-
             if (filteredNames.length > 0) {
-                const listWrapper = document.createElement('div');
-                listWrapper.className = 'pt-6 pb-2'; // 留出空間給關閉按鈕
                 filteredNames.forEach(name => {
                     const item = document.createElement('button');
-                    item.type = 'button';
-                    item.className = 'w-full text-left p-3 rounded-lg hover:opacity-75 transition-opacity duration-200 text-slate-700';
+                    item.className = 'w-full text-left p-3 rounded-lg hover:bg-purple-100 transition-colors duration-200 text-slate-700';
                     item.textContent = name;
                     item.addEventListener('click', () => handleSearch(name));
-                    listWrapper.appendChild(item);
+                    participantListContainer.appendChild(item);
                 });
-                participantListContainer.appendChild(listWrapper);
             } else {
-                const empty = document.createElement('p');
-                empty.className = 'text-center text-slate-500 p-6 pt-8';
-                empty.textContent = '找不到符合的參加者';
-                participantListContainer.appendChild(empty);
-            }
-
-            // 只有當輸入欄為 focus 時才自動顯示下拉，避免上傳後自動跳出
-            const isFocused = (document.activeElement === searchInput);
-            if (isFocused && (filteredNames.length > 0 || uniqueParticipantNames.size === 0)) {
-                participantListContainer.classList.remove('hidden');
-            } else {
-                participantListContainer.classList.add('hidden');
+                participantListContainer.innerHTML = '<p class="text-center text-slate-500 p-4">找不到符合的參加者</p>';
             }
         }
 
