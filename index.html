@@ -183,7 +183,6 @@
             fileStatus.appendChild(processingStatus);
 
             const promises = zipFiles.map(file => processZipFile(file).catch(err => ({ file: file.name, error: err.message })));
-            // Promise.allSettled is better here to ensure all zips are processed even if one fails
             const results = await Promise.allSettled(promises);
             
             processingStatus.remove();
@@ -191,7 +190,6 @@
             let totalMeetingsParsed = 0;
             results.forEach(result => {
                 if (result.status === 'rejected') {
-                    // This might not be hit if the inner promise catches, but good practice
                     updateStatus(`處理檔案時發生未知錯誤: ${result.reason}`, 'error');
                     return;
                 }
@@ -220,12 +218,10 @@
             }
         }
 
-        // *** MODIFIED FUNCTION to handle multiple reports in one zip ***
         function processZipFile(file) {
             return new Promise((resolve, reject) => {
                 const jszip = new JSZip();
                 jszip.loadAsync(file).then(zip => {
-                    // Find ALL report files, not just the first one.
                     const reportFiles = Object.keys(zip.files).filter(filename => 
                         !zip.files[filename].dir && (filename.endsWith('.csv') || filename.endsWith('.xlsx'))
                     );
@@ -234,12 +230,10 @@
                         return reject(new Error('在 .zip 檔中找不到任何 .csv 或 .xlsx 會議紀錄。'));
                     }
 
-                    // Create a promise for each report file found.
                     const meetingPromises = reportFiles.map(reportFilePath => {
                         return new Promise((resolveFile, rejectFile) => {
                             const match = reportFilePath.match(/(\d{4}-\d{2}-\d{2}).*?「(.*?)」/);
                             if (!match) {
-                                // Ignore files that don't match the expected naming convention.
                                 return resolveFile(null);
                             }
                             const [_, date, meetingCode] = match;
@@ -254,11 +248,8 @@
                         });
                     });
 
-                    // Wait for all file promises to resolve.
                     Promise.all(meetingPromises).then(meetings => {
-                        // Filter out any null results from files that didn't match the name pattern.
                         const validMeetings = meetings.filter(m => m !== null);
-                        // Resolve with the array of valid meetings.
                         resolve({ file: file.name, data: validMeetings });
                     }).catch(reject);
 
@@ -340,6 +331,7 @@
             }
         }
 
+        // *** MODIFIED FUNCTION to fix date sorting ***
         function handleSearch(searchTerm) {
             if (!searchTerm) return;
             
@@ -348,13 +340,25 @@
             
             const selectedCodes = getSelectedMeetingCodes();
 
-            const outputLines = allMeetingsData
+            // 1. Collect raw data first
+            const recordsToSort = allMeetingsData
                 .filter(data => selectedCodes.includes(data.meetingCode))
                 .flatMap(meeting => 
                     meeting.participants
                         .filter(p => p.fullName === searchTerm)
-                        .map(p => formatOutputLine(meeting.date, p))
-                ).sort((a, b) => a.localeCompare(b));
+                        .map(participant => ({
+                            date: meeting.date,
+                            participant: participant,
+                            // Create a real Date object for accurate sorting
+                            sortableDate: new Date(meeting.date)
+                        }))
+                );
+
+            // 2. Sort by the real Date object
+            recordsToSort.sort((a, b) => a.sortableDate - b.sortableDate);
+
+            // 3. Map to final output strings AFTER sorting
+            const outputLines = recordsToSort.map(record => formatOutputLine(record.date, record.participant));
 
             resultsTitle.textContent = `"${searchTerm}" 的查詢結果`;
             resultsEl.textContent = outputLines.length > 0 ? outputLines.join('\n') : `在選定的會議中，找不到 "${searchTerm}" 的參加紀錄。`;
