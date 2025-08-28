@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Meet 會議紀錄整理工具 (柔光整合版)</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 JSZip -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- 引入 SheetJS (xlsx) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- 引入 Google Fonts: Noto Sans TC (思源黑體) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #f1f1f1; /* 柔和背景色 */
+        }
+        .neumorphism-card {
+            border-radius: 20px;
+            background: #f1f1f1;
+            box-shadow: 8px 8px 16px #c8c8c8, -8px -8px 16px #ffffff;
+        }
+        .flat-surface {
+            border-radius: 12px;
+            background-color: #e9e9e9;
+            border: 1px solid #dcdcdc;
+        }
+        .neumorphism-button {
+            border-radius: 10px;
+            background: #f1f1f1;
+            box-shadow: 6px 6px 12px #c8c8c8, -6px -6px 12px #ffffff;
+            transition: all 0.1s ease-in-out;
+        }
+        .neumorphism-button:active {
+            box-shadow: inset 6px 6px 12px #c8c8c8, inset -6px -6px 12px #ffffff;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border-left-color: #c084fc; /* purple-400 */
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        /* 客製化 checkbox，改為更沉穩的顏色 */
+        .custom-checkbox:checked {
+            background-image: url("data:image/svg+xml,%3csvg viewBox='0 0 16 16' fill='white' xmlns='http://www.w3.org/2000/svg'%3e%3cpath d='M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z'/%3e%3c/svg%3e");
+            background-color: #475569; /* slate-600 */
+            border-color: #475569; /* slate-600 */
+        }
+    </style>
+</head>
+<body class="text-slate-800">
+
+    <div class="container mx-auto p-4 md:p-8 max-w-3xl min-h-screen">
+        <header class="text-center mb-12">
+            <h1 class="text-4xl font-bold text-slate-800 tracking-tight">會議紀錄整理工具</h1>
+            <p class="mt-3 text-slate-500 text-lg">一站式上傳、篩選與查詢</p>
+        </header>
+
+        <main class="space-y-10">
+            <div class="neumorphism-card p-8">
+                <!-- 步驟一：上傳檔案 -->
+                <div>
+                    <h2 class="text-2xl font-bold mb-1 text-slate-700">上傳檔案</h2>
+                    <p class="text-slate-500 mb-6">請上傳由 Google Meet 產生的 .zip 會議紀錄</p>
+                    <div id="drop-zone" class="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center cursor-pointer hover:border-purple-400 hover:bg-purple-50 transition-colors duration-300">
+                        <input type="file" id="file-input" multiple accept=".zip" class="hidden">
+                        <div class="flex flex-col items-center text-slate-600">
+                             <svg class="w-16 h-16 text-purple-400 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12l-3-3m0 0l-3 3m3-3v6m-1.5-15H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>
+                            <p class="font-semibold text-slate-700">將檔案拖曳至此，或<span class="text-purple-500 font-bold">點擊選擇</span></p>
+                        </div>
+                    </div>
+                    <div id="file-status" class="mt-6 space-y-3"></div>
+                </div>
+
+                <!-- 步驟二：篩選與查詢 -->
+                <div id="filter-and-search-section" class="mt-8 pt-8 border-t border-slate-300 hidden">
+                    <h2 class="text-2xl font-bold mb-1 text-slate-700">篩選與查詢</h2>
+                    <p class="text-slate-500 mb-6">取消勾選以排除特定會議，然後選擇或搜尋參加者</p>
+                    
+                    <!-- 會議篩選 -->
+                    <div id="meeting-filter-container" class="mb-6">
+                        <h3 class="font-semibold text-slate-600 mb-2">會議列表 (勾選以納入查詢)</h3>
+                        <div id="meeting-list" class="max-h-40 overflow-y-auto space-y-2 flat-surface p-3">
+                            <!-- 會議 checkbox 將動態插入此處 -->
+                        </div>
+                    </div>
+
+                    <!-- 參加者搜尋 -->
+                    <div class="relative">
+                        <input type="search" id="search-input" placeholder="請先上傳檔案..." class="w-full p-4 flat-surface text-lg outline-none focus:ring-2 focus:ring-purple-400" disabled>
+                        <div id="participant-list-container" class="absolute z-10 w-full mt-2 bg-white border-2 border-slate-200 rounded-lg max-h-72 overflow-y-auto hidden shadow-lg"></div>
+                    </div>
+
+                    <!-- 結果顯示 -->
+                    <div id="results-container" class="mt-8 hidden">
+                        <div class="flex justify-between items-center mb-4">
+                             <h3 id="results-title" class="text-xl font-bold text-slate-700">查詢結果</h3>
+                             <button id="copy-button" class="neumorphism-button text-slate-700 text-sm font-semibold py-2 px-4">複製結果</button>
+                        </div>
+                        <pre id="results" class="flat-surface p-4 text-sm whitespace-pre-wrap font-mono text-slate-600"></pre>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="text-center mt-16 pb-8 text-sm text-slate-500">
+            <p>&copy; 2024 會議紀錄整理工具. All data is processed locally in your browser.</p>
+        </footer>
+    </div>
+
+    <script>
+        let allMeetingsData = [];
+        let uniqueMeetingCodes = new Set();
+        let uniqueParticipantNames = new Set();
+
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const fileStatus = document.getElementById('file-status');
+        const filterAndSearchSection = document.getElementById('filter-and-search-section');
+        const meetingList = document.getElementById('meeting-list');
+        const searchInput = document.getElementById('search-input');
+        const resultsContainer = document.getElementById('results-container');
+        const resultsTitle = document.getElementById('results-title');
+        const resultsEl = document.getElementById('results');
+        const copyButton = document.getElementById('copy-button');
+        const participantListContainer = document.getElementById('participant-list-container');
+
+        // --- Event Listeners ---
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => e.preventDefault());
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            handleFiles(e.dataTransfer.files);
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) handleFiles(e.target.files);
+        });
+        searchInput.addEventListener('input', renderParticipantList);
+        searchInput.addEventListener('focus', () => {
+             if (uniqueParticipantNames.size > 0) {
+                renderParticipantList(); // render but only show when focused (handled inside)
+             }
+        });
+        // 點擊外部隱藏下拉
+        document.addEventListener('click', (e) => {
+            if (!searchInput.contains(e.target) && !participantListContainer.contains(e.target)) {
+                participantListContainer.classList.add('hidden');
+            }
+        });
+        // Esc 快捷鍵關閉下拉
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                participantListContainer.classList.add('hidden');
+                if (document.activeElement === searchInput) searchInput.blur();
+            }
+        });
+
+        // --- Core Logic ---
+        async function handleFiles(files) {
+            // Reset state
+            allMeetingsData = [];
+            uniqueMeetingCodes = new Set();
+            fileStatus.innerHTML = '';
+            filterAndSearchSection.classList.add('hidden');
+            resultsContainer.classList.add('hidden');
+            searchInput.value = '';
+            searchInput.disabled = true;
+            searchInput.placeholder = "正在處理檔案...";
+            
+            const zipFiles = Array.from(files).filter(file => file.name.endsWith('.zip'));
+            if (zipFiles.length === 0) {
+                updateStatus('未找到 .zip 檔案。', 'error');
+                searchInput.placeholder = "上傳失敗，請重試";
+                return;
+            }
+
+            const processingStatus = document.createElement('div');
+            processingStatus.className = 'flex items-center gap-3 p-3 rounded-lg bg-purple-100 text-purple-800';
+            processingStatus.innerHTML = `<div class="spinner"></div> 正在處理 ${zipFiles.length} 個檔案...`;
+            fileStatus.appendChild(processingStatus);
+
+            const promises = zipFiles.map(file => processZipFile(file).catch(err => ({ file: file.name, error: err.message })));
+            const results = await Promise.all(promises);
+            
+            processingStatus.remove();
+
+            results.forEach(result => {
+                if (result.error) {
+                    updateStatus(`處理檔案 ${result.file} 失敗: ${result.error}`, 'error');
+                } else if (result.data) {
+                    allMeetingsData.push(result.data);
+                    uniqueMeetingCodes.add(result.data.meetingCode);
+                    updateStatus(`成功解析檔案: ${result.file}`, 'success');
+                }
+            });
+
+            if (allMeetingsData.length > 0) {
+                updateStatus(`總共成功匯入 ${allMeetingsData.length} 場會議紀錄。`, 'info');
+                filterAndSearchSection.classList.remove('hidden');
+                searchInput.disabled = false;
+                searchInput.placeholder = "點擊此處或輸入姓名以搜尋...";
+                renderMeetingFilterList();
+                updateParticipantListBasedOnFilter();
+            } else {
+                updateStatus('沒有成功匯入任何會議紀錄。', 'error');
+                searchInput.placeholder = "處理失敗，請檢查檔案";
+            }
+        }
+
+        function processZipFile(file) {
+            return new Promise((resolve, reject) => {
+                const jszip = new JSZip();
+                jszip.loadAsync(file).then(zip => {
+                    const reportFile = Object.keys(zip.files).find(f => !zip.files[f].dir && (f.endsWith('.csv') || f.endsWith('.xlsx')));
+                    if (!reportFile) return reject(new Error('在 .zip 檔中找不到 .csv 或 .xlsx 會議紀錄。'));
+
+                    const match = reportFile.match(/(\d{4}-\d{2}-\d{2}).*?「(.*?)」/);
+                    if (!match) return reject(new Error(`無法從檔名 "${reportFile}" 中解析會議日期。`));
+                    const [_, date, meetingCode] = match;
+
+                    const filePromise = reportFile.endsWith('.csv') 
+                        ? zip.file(reportFile).async('string').then(parseCsvContent)
+                        : zip.file(reportFile).async('arraybuffer').then(parseXlsxContent);
+                    
+                    filePromise.then(participants => resolve({ file: file.name, data: { date, meetingCode, participants } }));
+                }).catch(err => reject(new Error(`無法讀取 .zip 檔案: ${err.message}`)));
+            });
+        }
+
+        function parseXlsxContent(buffer) {
+            // Ensure ArrayBuffer is converted to Uint8Array for SheetJS
+            const data = new Uint8Array(buffer);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const sheetName = workbook.SheetNames[0];
+            const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+            return jsonData.slice(1).map(row => ({
+                fullName: `${row[1] || ''}${row[0] || ''}`.trim(),
+                joinTime: String(row[4] || ''), 
+                leaveTime: String(row[5] || ''),
+            })).filter(p => p.fullName);
+        }
+
+        function parseCsvContent(csvText) {
+            const lines = csvText.trim().split(/\r?\n/);
+            return lines.slice(1).map(line => {
+                const columns = line.split(',');
+                return {
+                    fullName: `${columns[1] || ''}${columns[0] || ''}`.trim(),
+                    joinTime: columns[4] ? columns[4].trim() : '',
+                    leaveTime: columns[5] ? columns[5].trim() : '',
+                };
+            }).filter(p => p.fullName);
+        }
+        
+        // --- UI Rendering and Filtering ---
+        function renderMeetingFilterList() {
+            meetingList.innerHTML = '';
+            [...uniqueMeetingCodes].sort().forEach(code => {
+                const container = document.createElement('label');
+                // *** 修改：移除 hover 背景色，改為更細膩的互動效果 ***
+                container.className = 'flex items-center space-x-3 p-2 rounded-md hover:opacity-75 cursor-pointer transition-opacity duration-200';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = code;
+                checkbox.checked = true;
+                checkbox.className = 'h-5 w-5 rounded border-slate-400 text-slate-600 focus:ring-slate-500 custom-checkbox';
+                checkbox.addEventListener('change', updateParticipantListBasedOnFilter);
+                
+                const label = document.createElement('span');
+                label.textContent = code;
+                label.className = 'text-slate-700';
+                
+                container.appendChild(checkbox);
+                container.appendChild(label);
+                meetingList.appendChild(container);
+            });
+        }
+
+        function updateParticipantListBasedOnFilter() {
+            const selectedCodes = getSelectedMeetingCodes();
+            uniqueParticipantNames.clear();
+            allMeetingsData
+                .filter(data => selectedCodes.includes(data.meetingCode))
+                .forEach(m => m.participants.forEach(p => uniqueParticipantNames.add(p.fullName)));
+            
+            renderParticipantList();
+        }
+        
+        function renderParticipantList() {
+            const filterText = searchInput.value.toLowerCase();
+            const filteredNames = [...uniqueParticipantNames].filter(name => name.toLowerCase().includes(filterText)).sort();
+
+            // 建立內容但是否顯示由 focus 決定
+            participantListContainer.innerHTML = '';
+            // 確保容器可定位以讓關閉按鈕絕對定位
+            participantListContainer.classList.add('relative');
+
+            // 關閉按鈕（右上角）
+            const closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.innerHTML = '&times;';
+            closeBtn.className = 'absolute top-2 right-2 text-slate-500 hover:text-slate-700 px-2 py-1';
+            closeBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                participantListContainer.classList.add('hidden');
+                searchInput.blur();
+            });
+            participantListContainer.appendChild(closeBtn);
+
+            if (filteredNames.length > 0) {
+                const listWrapper = document.createElement('div');
+                listWrapper.className = 'pt-6 pb-2'; // 留出空間給關閉按鈕
+                filteredNames.forEach(name => {
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = 'w-full text-left p-3 rounded-lg hover:opacity-75 transition-opacity duration-200 text-slate-700';
+                    item.textContent = name;
+                    item.addEventListener('click', () => handleSearch(name));
+                    listWrapper.appendChild(item);
+                });
+                participantListContainer.appendChild(listWrapper);
+            } else {
+                const empty = document.createElement('p');
+                empty.className = 'text-center text-slate-500 p-6 pt-8';
+                empty.textContent = '找不到符合的參加者';
+                participantListContainer.appendChild(empty);
+            }
+
+            // 只有當輸入欄為 focus 時才自動顯示下拉，避免上傳後自動跳出
+            const isFocused = (document.activeElement === searchInput);
+            if (isFocused && (filteredNames.length > 0 || uniqueParticipantNames.size === 0)) {
+                participantListContainer.classList.remove('hidden');
+            } else {
+                participantListContainer.classList.add('hidden');
+            }
+        }
+
+        function handleSearch(searchTerm) {
+            if (!searchTerm) return;
+            
+            searchInput.value = searchTerm;
+            participantListContainer.classList.add('hidden');
+            
+            const selectedCodes = getSelectedMeetingCodes();
+
+            const outputLines = allMeetingsData
+                .filter(data => selectedCodes.includes(data.meetingCode))
+                .flatMap(meeting => 
+                    meeting.participants
+                        .filter(p => p.fullName === searchTerm)
+                        .map(p => formatOutputLine(meeting.date, p))
+                ).sort((a, b) => a.localeCompare(b));
+
+            resultsTitle.textContent = `"${searchTerm}" 的查詢結果`;
+            resultsEl.textContent = outputLines.length > 0 ? outputLines.join('\n') : `在選定的會議中，找不到 "${searchTerm}" 的參加紀錄。`;
+            resultsContainer.classList.remove('hidden');
+        }
+
+        function getSelectedMeetingCodes() {
+            return Array.from(meetingList.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
+        }
+
+        // --- Formatting and Utilities ---
+        function formatOutputLine(dateStr, participant) {
+            try {
+                const date = new Date(dateStr);
+                const month = date.getMonth() + 1;
+                const day = date.getDate();
+                const weekDay = ['日', '一', '二', '三', '四', '五', '六'][date.getDay()];
+                const formattedDate = `${month}/${day}（${weekDay}）`;
+
+                const joinDate = parseMeetTime(participant.joinTime, date);
+                const leaveDate = parseMeetTime(participant.leaveTime, date);
+
+                if (!joinDate || !leaveDate || leaveDate < joinDate) return `${formattedDate}_時間格式錯誤`;
+
+                const joinTimeStr = joinDate.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+                const leaveTimeStr = leaveDate.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+                
+                const durationMs = leaveDate - joinDate;
+                const durationHours = durationMs / (1000 * 60 * 60);
+                const roundedHours = Math.round(durationHours * 4) / 4;
+
+                return `${formattedDate}${joinTimeStr}~${leaveTimeStr}_${String(roundedHours)}hr`;
+            } catch (e) {
+                return `${dateStr}_資料處理錯誤`;
+            }
+        }
+
+        function parseMeetTime(timeStr, baseDate) {
+            const match = timeStr.match(/(上午|下午)?\s*(\d{1,2}):(\d{2})/);
+            if (!match) return null;
+
+            let [_, period, h, m] = match;
+            let hours = parseInt(h, 10);
+            if (period === '下午' && hours !== 12) hours += 12;
+            if (period === '上午' && hours === 12) hours = 0;
+            
+            const newDate = new Date(baseDate);
+            newDate.setHours(hours, parseInt(m, 10), 0, 0);
+            return newDate;
+        }
+        
+        function updateStatus(message, type) {
+            const statusDiv = document.createElement('div');
+            const styles = {
+                success: 'bg-green-100 text-green-800',
+                error: 'bg-red-100 text-red-800',
+                info: 'bg-blue-100 text-blue-800'
+            };
+            const icons = { success: '✓', error: '✗', info: 'i' };
+            statusDiv.className = `p-3 rounded-lg text-base flex items-center gap-3 ${styles[type] || styles['info']}`;
+            statusDiv.innerHTML = `<span class="font-bold text-lg">${icons[type] || icons['info']}</span> <span>${message}</span>`;
+            fileStatus.appendChild(statusDiv);
+        }
+
+        copyButton.addEventListener('click', () => {
+            const textToCopy = resultsEl.textContent;
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(textToCopy).then(() => {
+                    copyButton.textContent = '已複製！';
+                    setTimeout(() => { copyButton.textContent = '複製結果'; }, 2000);
+                }).catch(err => {
+                    fallbackCopyTextToClipboard(textToCopy);
+                });
+            } else {
+                fallbackCopyTextToClipboard(textToCopy);
+            }
+        });
+
+        function fallbackCopyTextToClipboard(text) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.top = 0;
+            textArea.style.left = 0;
+            textArea.style.width = '2em';
+            textArea.style.height = '2em';
+            textArea.style.padding = 0;
+            textArea.style.border = 'none';
+            textArea.style.outline = 'none';
+            textArea.style.boxShadow = 'none';
+            textArea.style.background = 'transparent';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    copyButton.textContent = '已複製！';
+                    setTimeout(() => { copyButton.textContent = '複製結果'; }, 2000);
+                } else {
+                    showCustomAlert('複製失敗');
+                }
+            } catch (err) {
+                showCustomAlert('複製失敗');
+            }
+            document.body.removeChild(textArea);
+        }
+        
+        function showCustomAlert(message) {
+            let alertBox = document.getElementById('custom-alert');
+            if (!alertBox) {
+                alertBox = document.createElement('div');
+                alertBox.id = 'custom-alert';
+                alertBox.className = 'fixed top-5 left-1/2 -translate-x-1/2 bg-red-600 text-white font-semibold px-5 py-3 rounded-lg z-50 transition-all duration-300 shadow-2xl';
+                document.body.appendChild(alertBox);
+            }
+            alertBox.textContent = message;
+            alertBox.style.opacity = '1';
+            alertBox.style.transform = 'translate(-50%, 0)';
+            setTimeout(() => {
+                alertBox.style.opacity = '0';
+                alertBox.style.transform = 'translate(-50%, -20px)';
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
